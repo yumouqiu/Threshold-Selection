@@ -1,0 +1,437 @@
+###############################################################################################
+# Code for evaluating the performance of the proposed and the CV methods in tuning parameter # 
+# selection for the adaptive thresholding covariance estimator (Cai and Liu 2011)             #                                                                                                                        #
+###############################################################################################
+
+
+
+###############################################################################################
+###############################################################################################
+#CODE FOR SIMULATION STUDY IN SECTION 5                                                      #
+###############################################################################################
+###############################################################################################
+
+# p is the dimension of the data
+# n is the sample size
+
+library(mvtnorm)
+
+##################################################
+# R functions for generating covariance matrices #
+##################################################
+
+# Structure A
+sigAR = function(p, diag0, rho){
+  # diag0 is the value for the diagonal entries
+  A = diag(rep(diag0, p))
+  for (i in 1 : (p - 1)){
+    for (j in (i + 1) : p){
+      A[i, j] = rho^(abs(i - j))
+      A[j, i] = A[i, j]
+    }
+  }
+  D = runif(p, 0.1, 10)
+  A = diag(D) %*% A %*% diag(D) 
+  return(A)
+}
+
+# Structure B
+sigARR = function(p, diag0, rho, a, b){
+#a and b are vectors containing the lower and upper limits of the considered uniform 
+# distributions, respectively
+  a1 = a[1]; a2 = a[2]; a3 = a[3]; b1 = b[1]; b2 = b[2]; b3 = b[3]
+  A = diag(rep(diag0, p))
+  for (i in 1 : (p - 1)){
+    for (j in (i + 1) : p){
+      if (abs(i - j) == 1) A[i, j] = rho^(abs(i - j)) + runif(1, a1, b1)
+      if (abs(i - j) == 2) A[i, j] = rho^(abs(i - j)) + runif(1, a2, b2)
+      if ((abs(i - j) > 2) & (abs(i - j) <= 6)) A[i, j] = rho^(abs(i - j)) + runif(1, a3, b3)
+      A[j, i] = A[i, j]
+    }
+  }
+  D = runif(p, 0.1, 10)
+  A = diag(D) %*% A %*% diag(D)
+  return(A)
+}
+
+# Structure C
+sigBD = function(p, diag0, a, b, k){
+  # a and b are the limits of the uniform distribution and k is the block size
+  A = diag(rep(diag0, p))
+  m = p / k
+  for (h in 1 : m){
+    for (i in ((h - 1) * k + 1) : (h * k)){
+      for (j in ((h - 1) * k + 1) : (h * k)){
+        if (i > j){
+          temp = runif(1, a, b)
+          A[i, j] = temp
+          A[j, i] = temp
+        }
+      }
+    }
+  }
+  D = runif(p, 0.1, 10)
+  A = diag(D) %*% A %*% diag(D)
+  return(A)
+}
+
+# Generating structure D
+sigRSM = function(p, diag0, diag1, diag2, a, b, c, d){
+  # diag1 is the value for the first off diagonal
+  # diag2 is the value for the second off diagonal
+  # a and b are the limits of a uniform distribution added to diag1 and diag2
+  # c and d are the limits of a uniform distribution added to diag2
+  A = diag(rep(diag0, p))
+  for (i in 1 : (p - 1)) {A[i, i + 1] = diag1 + runif(1, a, b); A[i + 1, i] = A[i, i + 1]}
+  for (i in 1 : (p - 2)) {A[i, i + 2] = diag2 + runif(1, c, d); A[i + 2, i] = A[i, i + 2]}
+  D = runif(p, 0.1, 10)
+  A = diag(D) %*% A %*% diag(D)
+  return(A)
+}
+
+# Function for permuting the indices of the matrices
+sigP = function(Sigma){
+  p = dim(Sigma)[1]
+  permutation = sample(c(1 : p))
+  res = matrix(0, p, p)
+  for (i in 1 : p){
+    for (j in 1 : p){
+      res[i, j] = Sigma[permutation[i], permutation[j]]
+    }
+  }
+  return(res)
+} 
+###################################################################################################
+
+
+#############################################################################
+# R function for evaluating the objective function using the relation (3.9) #
+#############################################################################
+Obj<-function(n,p,del,Sig,t){
+  # del is the argument for delta
+  # Sig is the covariance matrix
+  # t is the matrix of the entries theta_j1_j2
+  indexM = matrix(1, p, p) - diag(rep(1, p))
+  del = del * indexM
+  f1<-del*sqrt(log(p))-(Sig/sqrt(t/n))
+  f2<-del*sqrt(log(p))+(Sig/sqrt(t/n))
+  nd1<-dnorm(f1)
+  nd2<-dnorm(f2)
+  ntp1<-1-pnorm(f1)
+  ntp2<-1-pnorm(f2)
+  ntp3<-1-pnorm(-f1)
+  one<-t/n
+  two<-(f1*nd1)+ntp1+(f2*nd2)+ntp2
+  thr<-(Sig*Sig)*(ntp3-ntp2)
+  four<-(one*two)+thr
+  fun<-sum(four)
+  return(fun)
+}
+
+
+##############################################################################
+# R function for Golden section method (GSM) to find optimal delta in (3.10) #
+##############################################################################
+GSM = function(n,p,l,u,Sig,t)
+{
+  # l is the lower bound of the considered search interval of the GSM. 
+  # u is the upper bound of the considered search interval of the GSM. 
+  GoldenRatio = 2/(sqrt(5) + 1)
+  LBound<-l
+  UBound<-u
+  tol<-10^(-7)
+  # Use the golden ratio to set the initial test points
+  x1 = UBound - GoldenRatio*(UBound - LBound)
+  x2 = LBound + GoldenRatio*(UBound - LBound)
+  
+  # Evaluate the function at the test points
+  f1 = Obj(n,p,x1,Sig,t)
+  f2 = Obj(n,p,x2,Sig,t)
+  
+  iteration = 0
+  
+  while (abs(UBound - LBound) > tol)
+  {
+    iteration = iteration + 1
+    if (f2 > f1)
+    {
+      UBound = x2
+      # Set the new upper test point
+      # Use the special result of the golden ratio
+      x2 = x1
+      f2 = f1
+      # Set the new lower test point
+      x1 = UBound - GoldenRatio*(UBound - LBound)
+      f1 = Obj(n,p,x1,Sig,t)
+    } 
+    else 
+    {
+      # the minimum is to the right of x1
+      # let x1 be the new lower bound
+      # let x2 be the new lower test point
+      # Set the new lower bound
+      LBound = x1
+      # Set the new lower test point
+      x1 = x2
+      f1 = f2
+      
+      # Set the new upper test point
+      x2 = LBound + GoldenRatio*(UBound - LBound)
+      f2 = Obj(n,p,x2,Sig,t)
+    }
+  }
+  minimizer = (LBound + UBound)/2
+  return(minimizer)
+}
+
+
+################################################################
+# R function for evaluating standardized population covariance #
+################################################################
+c1c2 = function(n, p, Sig, t){
+  ALam = c()
+  kk = 0
+  for (i in 1 : (p-1)){
+    for (j in (i+1) : p){
+      if ( abs(Sig[i, j] / sqrt(t[i, j])) > 10^{-3}){
+        kk = kk + 1
+        ALam[kk] = abs(Sig[i, j] / sqrt(t[i, j]) * sqrt(n / log(p)))
+      }
+    }
+  }
+  list(n0elmt=ALam)
+}
+
+
+#############################################################
+# R function for evaluating the theoretical delta in (3.12) #
+#############################################################
+alldel = function(n, p, l, u, Sig, t, a1 , a2 ){
+  # a1 and a2 are for upper and lower values of the proposed interval. 
+  no0ele = c1c2(n, p, Sig, t)$n0elmt
+  n0 = sum((no0ele < a2) & (no0ele > a1))
+  # Evaluating optimal delta using GSM. 
+  deltaTrue = GSM(n, p, l, u, Sig, t)
+  deltaTheorem = sqrt(2) * sqrt(2 - log(n0 / sqrt(log(p))) / log(p))
+  return(c(deltaTrue, deltaTheorem))  
+}
+
+
+#####################################################
+#R function for selecting delta using the CV method #
+#####################################################
+find.del=function(n,p,H,N,X){
+  # H is the number of splits of the data
+  # 2N is the number of points in the partition of the interval [0,2]
+  # X is the data matrix
+  nn1=ceiling(n*(1-(1/log(n))))
+  sub=c()
+  Ra.ij=array(0,dim=c(H,2*N))
+  for (l in 1:H){
+    sub=sample(nrow(X),nn1,replace = FALSE, prob = NULL)
+    sam1=X[sub,]
+    sam2=X[-sub,]
+    n1=nrow(sam1)
+    n2=nrow(sam2)
+    Sig.hat1=((n1-1)/n1)*cov(sam1)
+    Sig.hat2=((n2-1)/n2)*cov(sam2)
+    one=matrix(1,nrow=n1,ncol=n1)
+    Xbar=one%*%sam1/n1
+    t.hat=array(0,dim=c(p,p))
+    that1=c()
+    for( i in 1:p){
+      for(j in 1:p){
+        s=c()
+        for(k in 1:n1){
+          s[k]=((sam1[k,i]-Xbar[k,i])*(sam1[k,j]-Xbar[k,j])-Sig.hat1[i,j])^2
+        }
+        that1[j]=sum(s)/n1
+      }
+      t.hat[i,]=that1
+    }
+    Raj.i=c()
+    to=2*N
+    for (m in 1:to){
+      Sig.hat.star1=matrix(0,nrow=p,ncol=p)
+      am=m/N
+      Lam.am=am*sqrt(t.hat*log(p)/n1)
+      Sig.hat.star1[which(abs(Sig.hat1)>Lam.am)]=Sig.hat1[which(abs(Sig.hat1)>Lam.am)]
+      Raj.i[m]=sum((Sig.hat.star1-Sig.hat2)^2)
+    }
+    Ra.ij[l,]=Raj.i
+  }
+  
+  aj=c()
+  Rhat.a=c()
+  for (j in 1:to){
+    Rhat.a=c(Rhat.a,sum(Ra.ij[,j])/H)
+    aj[j]=j/N
+  }
+  j.hat=which(Rhat.a==min(Rhat.a))
+  
+  delta.hat=aj[min(j.hat)]
+  return(delta.hat)
+} 
+
+##############################################################
+# R function for evaluating the proposed estimator in (4.13) #
+##############################################################
+
+c1c2Est = function(n, Sn, t.hat, a1 , a2, c0 ){
+  # Sn is the sample covariance matrix.
+  # t.hat is the matrix of theta^_j1j2.
+  # c0 prevents getting negative values for N2hat.
+  p = dim(Sn)[1]
+  ALamhat1 = c()
+  kk = 0
+  for (i in 1 : (p-1 )){
+    for (j in (i+1 ) : p){
+      kk = kk + 1
+      ALamhat1[kk] = abs(Sn[i, j] / sqrt(t.hat[i, j]) * sqrt(n / log(p)))
+    }
+  }
+  Mk = sum((ALamhat1 > a1) & (ALamhat1 < a2))
+  nhat = Mk - 2 * (pnorm((a2) * sqrt(log(p))) - pnorm((a1)* sqrt(log(p)))) * ((p^2 - p) / 2)
+  if(nhat > c0)  {on = (log(nhat / sqrt(log(p)))) / log(p); deltaStarhat = sqrt(2 * (2 - on))}
+  if(nhat <= c0)  {deltaStarhat = 2} 
+  list(deltaStarhat = deltaStarhat) 
+}
+#################################################################################################
+
+################
+# Run the code #
+################
+
+rep = 1000 # rep is the number of repetition.
+n = 40 # Setting sample size to 40 for the data. Set n=200 for getting sample of size 200. 
+p =100 # Setting the dimension of the data to 100. Set p to be 200,400,600 for other considered dimensions.
+l = 0 # Assigning the lower bound of the interval [0,2].
+u = 2 # Assigning the upper bound of the interval [0,2].
+H=50 # Set the number of splits of the CV method to 50.
+N=100 #Set the number of equally spaced points to 200 for the CV method. Note that number of equally spaced points is 2N. 
+
+Sig_til = sigAR(p, 1, 0.5) # Call the covariance generated by the structure A
+#Sig_til = sigARR(p, 1, 0.5, c(-0.1, -0.05, -0.01), c(0.1, 0.05, 0.01)) # Call the covariance generated by the structure B
+#Sig_til = sigBD(p, 1, 0.1, 0.6, 3) # Call the covariance generated by the structure C
+#Sig_til = sigRSM(p, 1, 0.5, 0.05, -0.01, 0.01, -0.05, 0.05) # Call the covariance generated by the structure D
+
+##############################################################################################
+Sigma = sigP(Sig_til) # Permute the indices of the covariance
+
+#Calculation of theta_j1j_2 using the relation proposed by Qiu and Chen (2015) for normal data
+##############################################################################################
+theta = matrix(data = vector(mode = "numeric",length = p * p),nrow = p)
+for(i in 1 : p){
+  for (j in 1 : p){
+    theta[i, j] = (Sigma[i, i] * Sigma[j, j]) + (Sigma[i, j] * Sigma[i, j])
+  }
+}
+
+
+
+a=min(sqrt(2 + log(n) / log(p)),2) # Defining a for the intervals S1 and S2.  
+SSignal = c1c2(n, p, Sigma, theta)$n0elmt
+resTure = alldel(n, p, l, u, Sigma, theta, a1 = 2 - a, a2 = 2)
+
+
+mu = rep(0, p)
+indexM = matrix(1, p, p) - diag(rep(1, p))
+result = matrix(0, rep, 14)
+res1 = matrix(0, rep, 4)
+
+for (ite in 1 : rep){ # for loop for replicating each case 1000 times.
+  X = rmvnorm(n, mu, Sigma) # Generating multivariate normal random vectors.
+  Sn = cov(X)
+  Xbar = colSums(X)/n
+  # Evaluating theta hat using the estimator proposed by Cai and Liu (2011)
+  thetahat = matrix(0, p, p)
+  for(i in 1 : p){
+    for(j in 1 : p){
+      s = c()
+      for(k in 1 : n){
+        s[k] = (((X[k, i] - Xbar[i]) * (X[k, j] - Xbar[j])) - Sn[i, j])^2
+      }
+      thetahat[i, j] = sum(s) / n
+    }
+  }
+  thetahatDiag = thetahat * indexM
+  
+  a0 =sqrt(1/log(log(p))) # Contamination correction factor
+  # Evaluating the proposed estimator
+  temp = c1c2Est(n, Sn, thetahat, a1 = 2 - a+a0, a2 = 2 , c0 = sqrt(log(p)))
+  deltaProp = temp$deltaStarhat
+  
+  # Evaluating the adaptive thresholding covariance estimator using the proposed delta
+  SigmaProp = matrix(0, p, p)
+  SigmaProp[which(abs(Sn) > deltaProp * sqrt(thetahatDiag * log(p) / n), arr.ind = TRUE)] = Sn[which(abs(Sn) > deltaProp * sqrt(thetahatDiag * log(p) / n), arr.ind = TRUE)]
+  
+  # Evaluating the delta using the CV method
+  deltaCV =find.del(n,p,H,N,X)
+    
+    # Evaluating the adaptive thresholding covariance estimator using the CV delta
+    SigmaCV = matrix(0, p, p)
+  SigmaCV[which(abs(Sn) > deltaCV *sqrt( thetahatDiag * log(p) / n), arr.ind = TRUE)] = Sn[which(abs(Sn) > deltaCV * sqrt( thetahatDiag * log(p) / n), arr.ind = TRUE)]
+  
+  # Evaluating the adaptive thresholding covariance estimator using the optimal delta
+  SigmaTrue = matrix(0, p, p)
+  SigmaTrue[which(abs(Sn) > resTure[1] * sqrt(thetahatDiag * log(p) / n), arr.ind = TRUE)] = Sn[which(abs(Sn) > resTure[1] * sqrt(thetahatDiag * log(p) / n), arr.ind = TRUE)]
+  
+  #Evaluating the adaptive thresholding covariance estimator using the theoritical delta in (3.12).
+  SigmaThm = matrix(0, p, p)
+  SigmaThm[which(abs(Sn) > resTure[2] * sqrt(thetahatDiag * log(p) / n), arr.ind = TRUE)] = Sn[which(abs(Sn) > resTure[2] * sqrt(thetahatDiag * log(p) / n), arr.ind = TRUE)]
+  
+  SpNormCV = norm(SigmaCV - Sigma, type = "2") # Evaluating spectral loss
+  L1NormCV = norm(SigmaCV - Sigma, type = "O") # Evaluating operator loss
+  FNormCV = norm(SigmaCV - Sigma, type = "F") # Evaluating Frobenius loss
+  
+  SpNormProp = norm(SigmaProp - Sigma, type = "2")
+  L1NormProp = norm(SigmaProp - Sigma, type = "O")
+  FNormProp = norm(SigmaProp - Sigma, type = "F")
+  
+  SpNormTrue = norm(SigmaTrue - Sigma, type = "2")
+  L1NormTrue = norm(SigmaTrue - Sigma, type = "O")
+  FNormTrue = norm(SigmaTrue - Sigma, type = "F")
+  
+  SpNormThm = norm(SigmaThm - Sigma, type = "2")
+  L1NormThm = norm(SigmaThm - Sigma, type = "O")
+  FNormThm = norm(SigmaThm - Sigma, type = "F")
+  
+  
+  
+  result[ite, ] = c(deltaProp, deltaCV, SpNormProp, L1NormProp, FNormProp, SpNormCV, L1NormCV, FNormCV, SpNormTrue, L1NormTrue, FNormTrue, SpNormThm, L1NormThm, FNormThm)
+  cat("repetition =", ite, "\n")
+  
+}
+
+# Evaluating deltas using each method
+deltas = c(resTure[1 : 2], mean(result[, 1]), mean(result[, 2]))
+names(deltas) = c("True", "Theoretical", "Prop", "CV")
+
+FNormTrue = result[, 11]
+FNormThm = result[, 14]
+FNormProp = result[, 5]
+FNormCV = result[, 8]
+
+SpNormTrue = result[, 9]
+SpNormThm = result[, 12]
+SpNormProp = result[, 3]
+SpNormCV = result[, 6]
+
+L1NormTrue = result[, 10]
+L1NormThm = result[, 13]
+L1NormProp = result[, 4]
+L1NormCV = result[, 7]
+
+
+# Plotting boxplots of the Frobenius and Spectral losses
+par(mfrow=c(1,2)) 
+boxplot(FNormTrue, FNormThm, FNormProp, FNormCV, names=c("TR", "TM", "PR", "CV"), main="Frobenius loss (A, p=100)", outline = TRUE, plot = TRUE,cex.axis = 1.3, cex.lab = 1.3,cex.main=1.5)
+boxplot(SpNormTrue, SpNormThm, SpNormProp, SpNormCV, names=c("TR", "TM", "PR", "CV"), main="Spectral loss (A, p=100)", outline = TRUE, plot = TRUE,cex.axis = 1.3, cex.lab = 1.3,cex.main=1.5)
+
+
+deltas
+# Evaluating std dev of the proposed and the CV delta.
+stddeltas=c(sd(result[, 1]),sd(result[, 2]))
+names(stddeltas) = c("Prop", "CV")
+stddeltas
+###The end of code for running 1000 replications for evaluating delta, Frobenius and spectral losses under each method  ###############
