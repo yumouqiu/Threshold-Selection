@@ -1,0 +1,375 @@
+
+
+########################################################################################################
+########################################################################################################
+#                                  CODE FOR THE  EMPIRICAL STUDY IN SECTION 6                         #
+########################################################################################################
+########################################################################################################
+
+# Creating the new data set by drawing the top 100 and bottom 30 genes from the original data
+#######################################################################################################
+data=read.csv("khan_train.csv",header=TRUE, sep=",") # Reading the original dataset.
+data$gene=NULL
+data=as.matrix(data)
+data=t(data)
+
+# Evaluating the F statistics in (6.14)
+EWS=data[1:23,]
+BL=data[24:31,]
+NB=data[32:43,]
+RMS=data[44:64,]
+xbar=colMeans(data)
+xbar1=colMeans(EWS)
+xbar2=colMeans(BL)
+xbar3=colMeans(NB)
+xbar4=colMeans(RMS)
+
+n=dim(data)[1]
+k=4
+difsq1=dim(EWS)[1]*(xbar1-xbar)^2
+difsq2=dim(BL)[1]*(xbar2-xbar)^2
+difsq3=dim(NB)[1]*(xbar3-xbar)^2
+difsq4=dim(RMS)[1]*(xbar4-xbar)^2
+num=(difsq1+difsq2+difsq3+difsq4)/(k-1)# Numerator of the F statistics
+cowVar <- function(x,y) {
+  one=matrix(rep(1,dim(x)[1]),dim(x)[1])
+  bar=one%*%y
+  S=colSums((x-bar)^2)/(dim(x)[1]-1)
+  
+}
+S1=cowVar(EWS,xbar1)
+S2=cowVar(BL,xbar2)
+S3=cowVar(NB,xbar3)
+S4=cowVar(RMS,xbar4)
+
+dnr=(((dim(EWS)[1]-1)*S1)+((dim(BL)[1]-1)*S2)+((dim(NB)[1]-1)*S3)+((dim(RMS)[1]-1)*S4))/(n-k)# Denominator of F statistic
+
+Fstat=num/dnr # F statistics 
+jtop=order(Fstat)[1:100] 
+jbot=order(Fstat)[2279:2308] 
+topgene=data[,jtop] # Choosing the top 100 genes using the F statistics
+botgene=data[,jbot] # Choosing the bottom 30 genes using the F statistics
+newdata=cbind(topgene,botgene) # Combining top and bottom genes to create new data set
+write.table(newdata,file="newdata.csv",sep=",",col.names=NA,qmethod="double")
+
+############The end of the code for creating the new data set of selected top and bottom genes  ###############
+
+
+# Case study using the proposed method
+#######################################
+newdata=data.matrix(read.csv("newdata.csv", header = TRUE, row.names = 1,sep = ",")) #Reading the created sub data set using top 100 and bottom 30 genes.
+dimnames(newdata) <- NULL
+newdata=as.matrix(newdata)
+library(reshape2)
+#library(gplots)
+library(ggplot2)
+covmat=cov(newdata)
+p=dim(covmat)[1]
+n=dim(newdata)[1]
+thetahat = matrix(0, p, p)
+mean.new = colMeans(newdata)
+# Evaluating thetahat 
+t1=proc.time()[3]
+for(i in 1 : p){
+  for(j in 1 : p){
+    s = c()
+    for(k in 1 : n){
+      s[k] = (((newdata[k, i] - mean.new[i]) * (newdata[k, j] - mean.new[j])) - covmat[i, j])^2
+    }
+    thetahat[i, j] = sum(s) / n
+  }
+}
+c1c2Est = function(n, Sn, thetahat, a1 , a2, c0 ){
+  p = dim(Sn)[1]
+  ALamhat1 = c()
+  kk = 0
+  for (i in 1 : (p-1 )){
+    for (j in (i+1 ) : p){
+      kk = kk + 1
+      ALamhat1[kk] = abs(Sn[i, j] / sqrt(thetahat[i, j]) * sqrt(n / log(p)))
+    }
+  }
+  Mk = sum((ALamhat1 > a1) & (ALamhat1 < a2))
+  nhat = Mk - 2 * (pnorm((a2) * sqrt(log(p))) - pnorm((a1)* sqrt(log(p)))) * ((p^2 - p) / 2)
+  if(nhat > c0)  {on = (log(nhat / sqrt(log(p)))) / log(p); deltaStarhat = sqrt(2 * (2 - on))}
+  if(nhat <= c0)  {deltaStarhat = 2} 
+  list(deltaStarhat = deltaStarhat, nhat = nhat, ALamhat = ALamhat1, Mk = Mk) 
+}
+#t1=proc.time()[3]
+ a = min(sqrt(2 + log(n) / log(p)),2) 
+ b=sqrt(1/log(log(p)))
+ temp = c1c2Est(n, covmat, thetahat, a1 = 2 - a+b, a2 = 2 , c0 = sqrt(log(p)))
+t2=proc.time()[3]
+time.prop=t2-t1
+
+
+# Evaluating the adaptive thresholding covariance estimator using the proposed method
+SigmaProp = matrix(0, p, p)
+indexM = matrix(1, p, p) - diag(rep(1, p))
+thetahatDiag = thetahat * indexM
+deltaProp = temp$deltaStarhat
+SigmaProp[which(abs(covmat) > deltaProp * sqrt(thetahatDiag * log(p) / n), arr.ind = TRUE)] = covmat[which(abs(covmat) > deltaProp * sqrt(thetahatDiag * log(p) / n), arr.ind = TRUE)]
+# Calculating the proportion of zeros produced by the proposed method
+zeros.prop=sum(colSums(SigmaProp== 0))/(p^2)
+
+
+
+# Heatmap of absolute values of the covariance  #
+#################################################
+library("lattice")
+par(mar=c(3,4,2,2))
+SigmaProp[abs(SigmaProp) >1] =1
+ramp <- colorRamp(c( "white","black"))
+c=rgb( ramp(seq(0, 1, length = 16)), max = 255)
+xscale <- list(cex=1.3) 
+yscale <- list(cex=1.3) 
+levelplot(abs(SigmaProp),main=list(label="Heatmap (Proposed)",cex=1.5 ),  col.regions = c  ,
+          scales=list(x=xscale, y=yscale),xlab="", ylab="" ,colorkey=list(labels=list(cex=1),space="bottom"))
+
+
+# Gene co-expression networks on positive and negative correlations #
+#####################################################################
+library(igraph)
+rprop=matrix(rep(0,p^2),p)
+# Evaluating correlations using adaptive thresholding covariance estimator 
+for (i in 1 : (p - 1)){
+  for (j in (i + 1) : p){
+    
+    rprop[i,j]=SigmaProp[i,j]/sqrt(SigmaProp[i,i]*SigmaProp[j,j])
+    
+  }
+}
+
+trh=min(abs(rprop[which(abs(rprop)>0)])) # Choosing the smallest correlation as the cutoff value
+edgesP=which(rprop>=trh,arr.ind = T) # Choosing edges with positive correlations
+edgesN=which(-1*rprop>=trh,arr.ind = T) # Choosing edges with negative correlations
+lp=as.vector(t(edgesP))
+gp<-graph(lp, directed=F)
+ln=as.vector(t(edgesN))
+gn<-graph(ln, directed=F)
+
+# Function for wrapping strings
+wrap <- function(strings,width){
+  as.character(sapply(strings, FUN=function(x){
+    paste(strwrap(x, width=width), collapse="\n")
+  }))
+}
+
+# Wrapping the node labels
+V(gp)$label = wrap(V(gp)$label, 12)
+V(gn)$label = wrap(V(gn)$label, 12)
+
+#Change font size
+V(gp)$label.cex = .8
+V(gn)$label.cex = .8
+
+# Function for increasing node separation
+layoutattr <- function(graph, wc, strength=1,layout=layout.auto) {  
+  g <- graph.edgelist(get.edgelist(graph)) # create a lightweight copy of graph w/o the attributes.
+  E(g)$weight <- 1
+  
+  attr <- cbind(id=1:vcount(g), val=wc)
+  g <- g + vertices(unique(attr[,2])) + igraph::edges(unlist(t(attr)), weight=strength)
+  
+  l <- layout(g, weights=E(g)$weight)[1:vcount(graph),]
+  return(l)
+}
+top=seq(1:100)
+# Plotting positively correlated genes
+plot(gp, vertex.shape="none", vertex.size=1,vertex.label.color =ifelse(V(gp) %in% top, "blue", "black"),layout=layoutattr(gp, wc=1))
+title("Co-expression network of positively correlated genes \n(Proposed)",cex.main=1.5)
+legend("topleft",bty = "n", legend=c("Top genes", "Bottom genes"),col=c("blue", "black"), pch=c(15,15),cex=1)
+
+# Plotting negatively correlated genes
+plot(gn, vertex.shape="none", vertex.size=1,vertex.label.color =ifelse(V(gn) %in% top, "blue", "black"), 
+     layout=layoutattr(gn, wc=1))
+title("Co-expression network of negatively correlated genes \n(Proposed)",cex.main=1.5)
+legend("topleft",bty = "n", legend=c("Top genes", "Bottom genes"),col=c("blue", "black"), pch=c(15,15),cex=1)
+###################The end of codes for empirical study under the proposed method #################################
+
+
+# Case study using the CV method
+#################################
+newdata=data.matrix(read.csv("newdata.csv", header = TRUE, row.names = 1,sep = ","))
+dimnames(newdata) <- NULL
+newdata=as.matrix(newdata)
+library(reshape2)
+#library(gplots)
+library(ggplot2)
+covmat=cov(newdata)
+
+p=dim(covmat)[1]
+n=dim(newdata)[1]
+thetahat = matrix(0, p, p)
+mean.new = colMeans(newdata)
+
+# CV method to find delta
+############################################
+find.del=function(n,p,H,N,X){
+  nn1=floor(n*(1-(1/log(n))))
+  sub=c()
+  Ra.ij=array(0,dim=c(H,2*N))
+  for (l in 1:H){
+    sub=sample(nrow(X),nn1,replace = FALSE, prob = NULL)
+    sam1=X[sub,]
+    sam2=X[-sub,]
+    n1=nrow(sam1)
+    n2=nrow(sam2)
+    Sig.hat1=((n1-1)/n1)*cov(sam1)
+    Sig.hat2=((n2-1)/n2)*cov(sam2)
+    one=matrix(1,nrow=n1,ncol=n1)
+    Xbar=one%*%sam1/n1
+    t.hat=array(0,dim=c(p,p))
+    that1=c()
+    for( i in 1:p){
+      for(j in 1:p){
+        s=c()
+        for(k in 1:n1){
+          s[k]=((sam1[k,i]-Xbar[k,i])*(sam1[k,j]-Xbar[k,j])-Sig.hat1[i,j])^2
+        }
+        that1[j]=sum(s)/n1
+      }
+      t.hat[i,]=that1
+    }
+    Raj.i=c()
+    to=2*N
+    for (m in 1:to){
+      Sig.hat.star1=matrix(0,nrow=p,ncol=p)
+      am=m/N
+      Lam.am=am*sqrt(t.hat*log(p)/n1)    
+      Sig.hat.star1[which(abs(Sig.hat1)>Lam.am)]=Sig.hat1[which(abs(Sig.hat1)>Lam.am)]
+      Raj.i[m]=sum((Sig.hat.star1-Sig.hat2)^2)
+        }
+      Ra.ij[l,]=Raj.i
+  }
+  aj=c()
+  Rhat.a=c()
+  for (j in 1:to){
+    Rhat.a=c(Rhat.a,sum(Ra.ij[,j])/H)
+    aj[j]=j/N
+  }
+  j.hat=which(Rhat.a==min(Rhat.a))
+  delta.hat=aj[min(j.hat)]
+  return(delta.hat)
+} 
+
+
+thetahat = matrix(0, p, p)
+mean.new = colMeans(newdata)
+# Evaluating thetahat 
+for(i in 1 : p){
+  for(j in 1 : p){
+    s = c()
+    for(k in 1 : n){
+      s[k] = (((newdata[k, i] - mean.new[i]) * (newdata[k, j] - mean.new[j])) - covmat[i, j])^2
+    }
+    thetahat[i, j] = sum(s) / n
+  }
+}
+
+
+
+# Evaluating the adaptive thresholding estimator using the CV method
+indexM = matrix(1, p, p) - diag(rep(1, p))
+thetahatDiag = thetahat * indexM
+
+H = 50
+N=100
+tc1=proc.time()[3]
+deltaCV = find.del(n,p,H,N,newdata)
+tc2=proc.time()[3]
+time.CV=tc2-tc1
+SigmaCV = matrix(0, p, p)
+SigmaCV[which(abs(covmat) > deltaCV * sqrt(thetahatDiag * log(p) / n), arr.ind = TRUE)] = covmat[which(abs(covmat) > deltaCV *sqrt( thetahatDiag * log(p) / n), arr.ind = TRUE)]
+zeros.CV=sum(colSums(SigmaCV== 0))/(p^2) # Calculating the proportion of zeros for the CV method
+
+
+
+# Creating co-expression networks
+library(igraph)
+rCV=matrix(rep(0,p^2),p)
+for (i in 1 : (p - 1)){
+  for (j in (i + 1) : p){
+        rCV[i,j]=SigmaCV[i,j]/sqrt(SigmaCV[i,i]*SigmaCV[j,j])
+      }
+}
+trh=min(abs(rCV[which(abs(rCV)>0)]))
+edgesP=which(rCV>=trh,arr.ind = T) # Positively correlated edges
+edgesN=which(-1*rCV>=trh,arr.ind = T) # Negatively correlated edges
+lp=as.vector(t(edgesP))
+gp<-graph(lp, directed=F)
+ln=as.vector(t(edgesN))
+gn<-graph(ln, directed=F)
+
+# Function for wrapping strings
+wrap <- function(strings,width){
+  as.character(sapply(strings, FUN=function(x){
+    paste(strwrap(x, width=width), collapse="\n")
+  }))
+}
+
+
+V(gp)$label = wrap(V(gp)$label, 12)
+V(gn)$label = wrap(V(gn)$label, 12)
+
+
+V(gp)$label.cex = .8
+V(gn)$label.cex = .8
+
+layoutattr <- function(graph, wc, strength=1,layout=layout.auto) {  
+  g <- graph.edgelist(get.edgelist(graph)) 
+  E(g)$weight <- 1
+  attr <- cbind(id=1:vcount(g), val=wc)
+  g <- g + vertices(unique(attr[,2])) + igraph::edges(unlist(t(attr)), weight=strength)
+  l <- layout(g, weights=E(g)$weight)[1:vcount(graph),]
+  return(l)
+}
+
+top=seq(1:100)
+plot(gp, vertex.shape="none", vertex.size=1,vertex.label.color =ifelse(V(gp) %in% top, "blue", "black"), 
+     layout=layoutattr(gp, wc=1))
+title("Co-expression network of positively correlated genes \n(CV)",cex.main=1.5)
+legend("topleft",bty = "n", legend=c("Top genes", "Bottom genes"),col=c("blue", "black"), pch=c(15,15),cex=1)
+
+
+plot(gn, vertex.shape="none", vertex.size=1,vertex.label.color =ifelse(V(gn) %in% top, "blue", "black"), 
+     layout=layoutattr(gn, wc=1))
+title("Co-expression network of negatively correlated genes \n(CV)",cex.main=1.5)
+legend("topleft",bty = "n", legend=c("Top genes", "Bottom genes"),col=c("blue", "black"), pch=c(15,15),cex=1)
+
+
+# Creating heatmap
+###################
+library("lattice")
+par(mar=c(3,4,2,2))
+SigmaCV[abs(SigmaCV) >1] =1
+ramp <- colorRamp(c( "white","black"))
+c=rgb( ramp(seq(0, 1, length = 16)), max = 255)
+xscale <- list(cex=1.3) 
+yscale <- list(cex=1.3) 
+levelplot(abs(SigmaCV),main=list(label="Heatmap (CV)",cex=1.5 ),  col.regions = c  ,
+          scales=list(x=xscale, y=yscale),xlab="", ylab="" ,colorkey=list(labels=list(cex=1),space="bottom"))
+
+###############################  The end of codes for empirical study under the CV method #################################
+cat("The estimators under the proposed method:",deltaProp,"\n" )
+cat("The estimators under the CV method:",deltaCV,"\n" )
+
+cat("The percentage of zeros in the resulting covariance estimator under the proposed method:",zeros.prop,"\n")
+cat("The percentage of zeros in the resulting covariance estimator under the CV method:",zeros.CV,"\n")
+
+cat("Time taken by the proposed method:",time.prop,"\n")
+cat("Time taken by the CV method:",time.CV)
+
+
+
+###################################################################################################################
+###################################################################################################################
+#                                     THE END OF CODES FOR EMPIRICAL STUDY                                        #                     
+###################################################################################################################
+###################################################################################################################
+
+
+
+
+
+
