@@ -1,0 +1,230 @@
+########################################################################################
+# R Code for evaluating the efficiency of the CV method. (Time to run one repetition) #
+########################################################################################
+library(mvtnorm)
+
+# p is the dimension of the data
+# n is the sample size
+
+
+##################################################
+# R functions for generating covariance matrices #
+##################################################
+
+
+# Structure A
+sigAR = function(p, diag0, rho){
+  # diag0 is the value for the diagonal entries
+  A = diag(rep(diag0, p))
+  for (i in 1 : (p - 1)){
+    for (j in (i + 1) : p){
+      A[i, j] = rho^(abs(i - j))
+      A[j, i] = A[i, j]
+    }
+  }
+  D = runif(p, 0.1, 10)
+  A = diag(D) %*% A %*% diag(D) 
+  return(A)
+}
+
+# Structure B
+sigARR = function(p, diag0, rho, a, b){
+#a and b are vectors containing the lower and upper limits of the considered uniform 
+# distributions, respectively
+  a1 = a[1]; a2 = a[2]; a3 = a[3]; b1 = b[1]; b2 = b[2]; b3 = b[3]
+  A = diag(rep(diag0, p))
+  for (i in 1 : (p - 1)){
+    for (j in (i + 1) : p){
+      if (abs(i - j) == 1) A[i, j] = rho^(abs(i - j)) + runif(1, a1, b1)
+      if (abs(i - j) == 2) A[i, j] = rho^(abs(i - j)) + runif(1, a2, b2)
+      if ((abs(i - j) > 2) & (abs(i - j) <= 6)) A[i, j] = rho^(abs(i - j)) + runif(1, a3, b3)
+      A[j, i] = A[i, j]
+    }
+  }
+  D = runif(p, 0.1, 10)
+  A = diag(D) %*% A %*% diag(D)
+  return(A)
+}
+
+# Structure C
+sigBD = function(p, diag0, a, b, k){
+  # a and b are the limits of the uniform distribution and k is the block size
+  A = diag(rep(diag0, p))
+  m = p / k
+  for (h in 1 : m){
+    for (i in ((h - 1) * k + 1) : (h * k)){
+      for (j in ((h - 1) * k + 1) : (h * k)){
+        if (i > j){
+          temp = runif(1, a, b)
+          A[i, j] = temp
+          A[j, i] = temp
+        }
+      }
+    }
+  }
+  D = runif(p, 0.1, 10)
+  A = diag(D) %*% A %*% diag(D)
+  return(A)
+}
+
+# Generating structure D
+sigRSM = function(p, diag0, diag1, diag2, a, b, c, d){
+  # diag1 is the value for the first off diagonal
+  # diag2 is the value for the second off diagonal
+  # a and b are the limits of a uniform distribution added to diag1 and diag2
+  # c and d are the limits of a uniform distribution added to diag2
+  A = diag(rep(diag0, p))
+  for (i in 1 : (p - 1)) {A[i, i + 1] = diag1 + runif(1, a, b); A[i + 1, i] = A[i, i + 1]}
+  for (i in 1 : (p - 2)) {A[i, i + 2] = diag2 + runif(1, c, d); A[i + 2, i] = A[i, i + 2]}
+  D = runif(p, 0.1, 10)
+  A = diag(D) %*% A %*% diag(D)
+  return(A)
+}
+
+# Function for permuting the indices of the matrices
+sigP = function(Sigma){
+  p = dim(Sigma)[1]
+  permutation = sample(c(1 : p))
+  res = matrix(0, p, p)
+  for (i in 1 : p){
+    for (j in 1 : p){
+      res[i, j] = Sigma[permutation[i], permutation[j]]
+    }
+  }
+  return(res)
+} 
+###################################################################################################
+# R function for the CV method
+
+
+find.del=function(n,p,H,N,X){
+  # H is the number of splits of the data
+  # N is the nuber of points in the partition of the interval [0,2]
+  # X is the data matrix
+  nn1=floor(n*(1-(1/log(n))))
+  sub=c()
+  Ra.ij=array(0,dim=c(H,2*N))
+  for (l in 1:H){
+    sub=sample(nrow(X),nn1,replace = FALSE, prob = NULL)
+    sam1=X[sub,]
+    sam2=X[-sub,]
+    n1=nrow(sam1)
+    n2=nrow(sam2)
+    Sig.hat1=((n1-1)/n1)*cov(sam1)
+    Sig.hat2=((n2-1)/n2)*cov(sam2)
+    one=matrix(1,nrow=n1,ncol=n1)
+    Xbar=one%*%sam1/n1
+    t.hat=array(0,dim=c(p,p))
+    that1=c()
+    for( i in 1:p){
+      for(j in 1:p){
+        s=c()
+        for(k in 1:n1){
+          s[k]=((sam1[k,i]-Xbar[k,i])*(sam1[k,j]-Xbar[k,j])-Sig.hat1[i,j])^2
+        }
+        that1[j]=sum(s)/n1
+      }
+      t.hat[i,]=that1
+    }
+    Raj.i=c()
+    to=2*N
+    for (m in 1:to){
+      Sig.hat.star1=matrix(0,nrow=p,ncol=p)
+      am=m/N
+      Lam.am=am*sqrt(t.hat*log(p)/n1)
+      
+      Sig.hat.star1[which(abs(Sig.hat1)>Lam.am)]=Sig.hat1[which(abs(Sig.hat1)>Lam.am)]
+      Raj.i[m]=sum((Sig.hat.star1-Sig.hat2)^2)
+          }
+       Ra.ij[l,]=Raj.i
+  }
+  
+  aj=c()
+  Rhat.a=c()
+  for (j in 1:to){
+    Rhat.a=c(Rhat.a,sum(Ra.ij[,j])/H)
+    aj[j]=j/N
+     }
+  j.hat=which(Rhat.a==min(Rhat.a))
+  
+  delta.hat=aj[min(j.hat)]
+  return(delta.hat)
+  
+} 
+###################################################################################################
+# R function for the proposed method
+
+c1c2Est = function(n, Sn, thetahat, a1 , a2 , c0 ){
+  p = dim(Sn)[1]
+  ALamhat1 = c()
+  kk = 0
+  for (i in 1 : (p - 1)){
+    for (j in (i + 1) : p){
+      kk = kk + 1
+      ALamhat1[kk] = abs(Sn[i, j] / sqrt(thetahat[i, j]) * sqrt(n / log(p)))
+    }
+  }
+   Mk = sum((ALamhat1 > a1) & (ALamhat1 < a2))
+  nhat = Mk - 2 * (pnorm(a2 * sqrt(log(p))) - pnorm(a1 * sqrt(log(p)))) * ((p^2 - p) / 2)
+  if(nhat > c0)  {on = (log(nhat / sqrt(log(p)))) / log(p); deltaStarhat = sqrt(2 * (2 - on))}
+  if(nhat <= c0)  {deltaStarhat = 2} 
+  list(deltaStarhat = deltaStarhat, nhat = nhat, ALamhat = ALamhat1) 
+}
+
+H=50
+N=100
+
+##################
+#  Run the code  #
+##################
+n=40
+p=100
+
+Sig_til = sigAR(p, 1, 0.5) # Call the covariance generated by the structure A
+#Sig_til = sigARR(p, 1, 0.5, c(-0.1, -0.05, -0.01), c(0.1, 0.05, 0.01)) # Call the covariance generated by the structure B
+#Sig_til = sigBD(p, 1, 0.1, 0.6, 3) # Call the covariance generated by the structure C
+#Sig_til = sigRSM(p, 1, 0.5, 0.05, -0.01, 0.01, -0.05, 0.05) # Call the covariance generated by the structure D
+#############################################################
+Sigma = sigP(Sig_til)
+
+mu = rep(0, p)
+indexM = matrix(1, p, p) - diag(rep(1, p))
+
+
+  X = rmvnorm(n, mu, Sigma)
+  Sn = cov(X)
+  Xbar = colSums(X)/n
+ t1= proc.time()[3]
+  deltaCV = find.del(n,p,H,N,X)
+ 
+t2=proc.time()[3]
+t.CV=t2-t1
+t3=proc.time()[3]
+############   The end of the code for evaluation running time of the CV method  ###############
+
+thetahat = matrix(0, p, p)
+  for(i in 1 : p){
+    for(j in 1 : p){
+      s = c()
+      for(k in 1 : n){
+        s[k] = (((X[k, i] - Xbar[i]) * (X[k, j] - Xbar[j])) - Sn[i, j])^2
+      }
+      thetahat[i, j] = sum(s) / n
+    }
+  }
+  thetahatDiag = thetahat * indexM
+  
+  a = min(sqrt(2 + log(n) / log(p)),2) 
+  a0 =sqrt(1/log(log(p)))
+  deltaProp=c1c2Est(n, Sn, thetahat, a1 = 2 - a+a0, a2 = 2, c0 = sqrt(log(p)))$deltaStarhat 
+  
+t4=proc.time()[3]
+t.PROP=t4-t3
+############ The end of the code for evaluating the running time of the proposed method  ###############
+Ratio_t=t.CV/t.PROP
+Ratio_t 
+
+############ The end of the code ###########################
+
+
+
